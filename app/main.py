@@ -10,8 +10,8 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .geometry.validation import GeometryValidationError
-from .models import OverlapRequest, OverlapResponse
-from .service import compute_overlap, round_half_up_thirds
+from .models import OverlapRequest, OverlapResponse, TransectRequest, TransectResponse
+from .service import compute_overlap, compute_transect, round_half_up_thirds
 
 app = FastAPI(
     title="Exact Multi-Polygon Overlap API",
@@ -111,3 +111,9 @@ def overlap(req: OverlapRequest) -> OverlapResponse:
         denominator=area.denominator,
         decimal=decimal,
     )
+
+
+@app.post("/api/v1/transect", response_model=TransectResponse)
+def transect(req: TransectRequest) -> TransectResponse:
+    segments = compute_transect(req.a, req.b, req.path)
+    return TransectResponse(segments=segments)
