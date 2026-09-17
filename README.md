@@ -117,6 +117,76 @@ Fractional example (two triangles overlapping in a triangle of ½ mm²):
 `decimal` rounds the exact fraction **half-up** to exactly three digits
 (`0.0005 → 0.001`), implemented with integer arithmetic rather than `round()`.
 
+### `POST /api/v1/transect`
+
+Field surveyors also need to know **when** a patrol polyline enters a
+red-line (expropriation) parcel, a cadastral survey area, or the interior of
+both — not only the bulk overlap area. This endpoint takes the same `a` / `b`
+multi-polygon groups plus a `path` polyline (at least two integer-coordinate
+vertices; consecutive vertices must differ) and returns the exact crossing
+profile of every original segment:
+
+```json
+{
+  "a": [
+    {"exterior": [[0, 0], [10, 0], [10, 10], [0, 10]],
+     "holes": [[[3, 3], [7, 3], [7, 7], [3, 7]]]}
+  ],
+  "b": [
+    {"exterior": [[1, -1], [9, -1], [9, 11], [1, 11]]}
+  ],
+  "path": [[-2, 5], [12, 5]]
+}
+```
+
+Each original segment is split at **all** boundary contacts (proper
+crossings, vertex/T-junction contacts, isolated tangencies, hole crossings
+and collinear-overlap endpoints).  Intervals are returned in original segment
+and parameter order as a gap-free, non-overlapping tiling of `[0, 1]`:
+
+* `range` intervals — positive-length open pieces with `start`/`end` reduced
+  fractions and a state of `outside`, `inside` or `boundary` for each group;
+* `point` intervals — zero-length contact instants carrying per-group
+  `events` with the `before`/`after` relation and every ring touched
+  (`polygon` index, `boundary`: `exterior`/`hole`, `hole_index`).
+
+```json
+{
+  "segments": [
+    {
+      "index": 0,
+      "intervals": [
+        {"type": "range", "start": [0, 1], "end": [1, 7],
+         "a": "outside", "b": "outside"},
+        {"type": "point", "t": [1, 7], "a": "boundary", "b": "outside",
+         "events": [{"group": "a", "before": "outside", "after": "inside",
+                     "contacts": [{"polygon": 0, "boundary": "exterior",
+                                   "hole_index": null}]}]},
+        {"type": "range", "start": [1, 7], "end": [3, 14],
+         "a": "inside", "b": "outside"}
+      ]
+    }
+  ]
+}
+```
+
+Properties guaranteed by the exact geometry layer:
+
+* every intersection parameter is a reduced `Fraction` serialized as
+  `[numerator, denominator]` — fractional intersections never become floats;
+* every original segment is completely covered from `[0, 1]` with no gaps or
+  overlaps, and the ordering is stable;
+* vertex tangencies are isolated `point` intervals with identical
+  before/after states, hole boundaries are tagged `boundary: "hole"`, fold
+  vertices on a boundary and whole segments running along a collinear edge
+  are covered by `boundary` ranges with contact events at both ends;
+* reversing the entire polyline mirrors every interval (`t → 1 − t`) and
+  swaps each event's `before`/`after`, so forward and reverse profiles
+  correspond one-to-one;
+* a path with consecutive duplicate vertices is rejected with **422** at the
+  offending vertex's original position; polygon validation errors keep
+  their existing `a`/`b` locations.
+
 ### Errors (all 422 use one structured envelope)
 
 ```json
@@ -168,16 +238,23 @@ python3.13 -m venv .venv
 pip install -r requirements-dev.txt
 
 uvicorn app.main:app --reload
-pytest -q                                   # 87 pass, 6 skipped offline
+pytest -q                                   # 119 pass, 6 skipped offline
 
 EXACT_AREA_BASE_URL=http://127.0.0.1:8000 pytest -q   # with a server running:
-                                                      # all 93 tests execute
+                                                      # all 125 tests execute
 ```
 
 ## Test suite
 
 * `tests/test_api.py` — endpoint behaviour, fraction reduction, half-up
   rounding, contacts = 0, and order/rotation/orientation independence.
+* `tests/test_transect.py` — `/api/v1/transect` profiles through outer rings
+  and holes for both groups, vertex tangencies, boundary runs, fractional
+  forward/reverse correspondence, `[0,1]` coverage and path validation.
+* `tests/test_transect_units.py` — exact contact parameters (crossings,
+  T-junctions, tangencies, collinear overlaps) plus randomized differential
+  checks against an independent point-containment reference and randomized
+  reversal correspondence.
 * `tests/test_validation.py` — every 422 rule and the structured error body.
 * `tests/test_geometry_units.py` — primitives: orientation, point-on-segment,
   fractional intersection, simplicity detection, rounding table.
@@ -200,6 +277,7 @@ app/
     rationals.py          exact predicates, intersections, ring primitives
     validation.py         simplicity / containment / disjointness rules
     arrangement.py        planar arrangement + winding-number overlap area
+    transect.py           event-scan polyline crossing profiles (Fractions)
 tests/                    pytest suite (incl. live HTTP acceptance tests)
 Dockerfile                python:3.13-slim image (runtime + test deps)
 docker-compose.yml        api service (API_PORT) + one-shot verify service
